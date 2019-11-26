@@ -18,6 +18,7 @@ library(tidyverse)
 library(mlbench)
 library(caret)
 library(pROC)
+library(glmnet)
 ```
 
 ## The Breast Cancer Dataset
@@ -68,7 +69,6 @@ svm
 roc(predictor = svm$pred$malignant, response = svm$pred$obs)$auc
 
 plot(x = roc(predictor = svm$pred$malignant, response = svm$pred$obs)$specificities, y = roc(predictor = svm$pred$malignant, response = svm$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
-
 ```
 ## Test Set 
 
@@ -107,4 +107,134 @@ confusionMatrix(svm_test, reference = test_classification$Class)
 
 1. Choose an appropriate machine learning dataset and use SVM with two different kernels. Campare the results. 
 
+The Pima Indians Diabetes dataset is a decent dataset on which to try SVM methods. There are a total of 8 predictor variables for the binary outcome of diabetic status being positive or negative.
+
+There are a total of 768 observations.
+```{r, Load Data}
+##load in the data
+data("PimaIndiansDiabetes")
+
+##clean the data to make values numeric and remove any possible missing
+pima = PimaIndiansDiabetes %>% 
+  mutate_if(is.character, as.numeric)
+pima[is.na(pima)] = 0
+
+##set train and test sets
+train_size = floor(0.75 * nrow(pima))
+train_pos <- sample(seq_len(nrow(pima)), size = train_size)
+
+train_classification <- pima[train_pos, ]
+test_classification <- pima[-train_pos, ]
+```
+
+Once the data is prepped, the SVM with a linear kernal can be built and visualized.
+```{r, SVM linear}
+##set seed to make reproduceable
+set.seed(1112)
+##define control
+control = trainControl(method = "repeatedcv", repeats = 5, classProbs = T, savePredictions = T)
+
+##create SVM Linear model
+svm = train(diabetes ~ .,  data = train_classification, method = "svmLinear", tuneLength = 10, trControl = control)
+
+##view SVM model
+svm
+```
+
+Area under the ROC shows decent model performance of 0.8388.
+```{r, SVM Linear ROC}
+##calculate AUC ROC
+roc(predictor = svm$pred$pos, response = svm$pred$obs)$auc
+
+##visualize ROC plot
+plot(x = roc(predictor = svm$pred$pos, response = svm$pred$obs)$specificities, y = roc(predictor = svm$pred$pos, response = svm$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
+```
+
+To get a more detailed view of model performance, a confusion matrix can be built to see comparisons between predictive classes and any possible bias.
+```{r, SVM Linear Test Set Performance}
+##calculate confusion matrix to visualize classificaiton performance
+svm_test = predict(svm, newdata = test_classification)
+confusionMatrix(svm_test, reference = test_classification$diabetes)
+```
+
+To compare, the same steps as above will be run, but with a radial kernel for the SVM.
+```{r, SVM Radial}
+##set seed to make reproduceable
+set.seed(1112)
+##define control
+control = trainControl(method = "repeatedcv", repeats = 5, classProbs = T, savePredictions = T)
+
+##create SVM Radial model
+svm = train(diabetes ~ .,  data = train_classification, method = "svmRadial", tuneLength = 10, trControl = control)
+
+##view SVM model
+svm
+```
+
+```{r, SVM Radial ROC}
+##calculate AUC ROC
+roc(predictor = svm$pred$pos, response = svm$pred$obs)$auc
+
+##visualize ROC plot
+plot(x = roc(predictor = svm$pred$pos, response = svm$pred$obs)$specificities, y = roc(predictor = svm$pred$pos, response = svm$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
+```
+
+```{r, SVM Radial Test Set Performance}
+##calculate confusion matrix to visualize classificaiton performance
+svm_test = predict(svm, newdata = test_classification)
+confusionMatrix(svm_test, reference = test_classification$diabetes)
+```
+
+From both the area under the ROC and the confusion matrix, you can see that a linear kernel has better performance than a radial one. This indicates that the Pima Indians Diabetes dataset is likely split along a linear space, and does not require the radial kernel method, which could overfit the training set if used in a linear problem. It can be hard to determine what the spatial arangement is in datasets such as these with multiple predictors, but if there is doubt, construction of both models can help clarify and the simplest method is always going to be preferred.
+
 2. Attempt using SVM after using a previously covered feature selection method. Do the results improve? Explain. 
+
+Since this dataset performs better with a linear kernel, I chose to employ another linear-based feature selection model first, to see if the model performance could be improved. Below, Least Absolute Shrinkage and Selection Operator (LASSO) regression is performed on the same dataset, resulting in the elimination of 2 predictor variables: triceps measurement and insulin level.
+```{r, LASSO}
+set.seed(24)
+
+#convert data
+x = x <- as.matrix(pima[,1:8])
+y = as.double(as.matrix(ifelse(pima[,9]=='neg', 0, 1))) 
+
+#fit Lasso model 
+cv.lasso <- cv.glmnet(x, y, family='binomial', alpha=1, parallel=TRUE, standardize=TRUE, type.measure='auc')
+
+plot(cv.lasso)
+
+cat('Min Lambda: ', cv.lasso$lambda.min, '\n 1Sd Lambda: ', cv.lasso$lambda.1se)
+df_coef <- round(as.matrix(coef(cv.lasso, s=cv.lasso$lambda.min)), 2)
+
+# See all contributing variables
+df_coef[df_coef[, 1] != 0, ]
+```
+
+With this reduction in features, a new SVM model can be built with only the remaining 6 predictors, and performance can be visualized as before.
+```{r, SVM Linear after LASSO}
+##set seed to make reproduceable
+set.seed(1112)
+##define control
+control = trainControl(method = "repeatedcv", repeats = 5, classProbs = T, savePredictions = T)
+
+##create SVM Linear model
+svm = train(diabetes ~ pregnant + glucose + pressure + mass + pedigree + age,  data = train_classification, method = "svmLinear", tuneLength = 10, trControl = control)
+
+##view SVM model
+svm
+```
+
+```{r, SVM Linear ROC after LASSO}
+##calculate AUC ROC
+roc(predictor = svm$pred$pos, response = svm$pred$obs)$auc
+
+##visualize ROC plot
+plot(x = roc(predictor = svm$pred$pos, response = svm$pred$obs)$specificities, y = roc(predictor = svm$pred$pos, response = svm$pred$obs)$sensitivities, col= "blue", xlim = c(1, 0), type ="l", ylab = "Sensitivity", xlab = "Specificity")
+```
+
+```{r, SVM Linear Test Set Performance after LASSO}
+##calculate confusion matrix to visualize classificaiton performance
+svm_test = predict(svm, newdata = test_classification)
+confusionMatrix(svm_test, reference = test_classification$diabetes)
+```
+
+The resulting model shows a very tiny increase in performance. In fact, after LASSO regression, the model predicts ONE true negative case that it before incorrectly classified. While this objective boost in performance may signal that optimisation can improve SVM model performance, the computational toll should be factored in based on the gains expected from the dataset. SVM can be hindered by unnecessary features, but with only 8 predictors, this model is unlikely to suffer too much from that fact. I would imagine that feature selection prior to SVM would be more impactful on a dataset with higher dimensionality, or one with a significant number of features with very low predictive weight.
